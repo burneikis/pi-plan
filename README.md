@@ -5,9 +5,7 @@ A planning extension for [pi-coding-agent](https://github.com/nickarino/pi-codin
 ## Quick Install
 
 ```bash
-git clone https://github.com/burneikis/pi-plan.git /tmp/pi-plan && \
-  cp -r /tmp/pi-plan/pi-plan ~/.pi/agent/extensions/pi-plan && \
-  rm -rf /tmp/pi-plan
+git clone https://github.com/burneikis/pi-plan.git ~/.pi/agent/extensions/pi-plan
 ```
 
 Instead of jumping straight into implementation, `pi-plan` guides the AI through a **Q&A → Plan Draft → Review → Execute** cycle — ensuring alignment before any code is written.
@@ -52,18 +50,9 @@ During Q&A and review phases:
 - `edit` and `write` tool calls are blocked entirely
 - Full tool access is only restored when the plan is approved and execution begins in a new session
 
-## Manual Installation
-
-Copy the `pi-plan/` directory into your global extensions folder:
-
-```bash
-cp -r pi-plan/ ~/.pi/agent/extensions/pi-plan/
-```
-
 ## Project Structure
 
 ```
-pi-plan/
 ├── index.ts      # Extension entry point — commands, event hooks, tool blocking
 ├── planner.ts    # plan_ask and plan_draft tool registration
 ├── prompts.ts    # System prompt injections for each phase
