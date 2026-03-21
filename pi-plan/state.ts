@@ -3,7 +3,7 @@
  */
 
 export interface PlanState {
-  phase: "idle" | "qa" | "review" | "executing";
+  phase: "idle" | "qa" | "review";
   planFile: string | null;
 }
 

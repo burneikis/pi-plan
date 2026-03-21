@@ -33,15 +33,15 @@ export function getReviewPrompt(planFile: string): string {
 
 The plan has been written to: ${planFile}
 
-The user is reviewing the plan. They may:
-- Ask you to suggest changes to specific sections
-- Ask questions about the plan
-- Request you regenerate parts of the plan
+The user is reviewing the plan. They can:
+- Chat with you to discuss changes (you have read-only access to suggest edits)
+- Run /plan-edit to edit the plan inline
+- Run /plan-editor to open the plan in $EDITOR
+- Run /plan-show to re-display the plan
+- Run /plan-approve to approve and execute in a fresh session
+- Run /plan-cancel to cancel planning
 
-You can read the plan file and suggest specific edits. You have read-only access to the codebase.
-You CANNOT modify files directly — suggest changes for the user to review.
-
-If the user is satisfied, they can run /plan-approve to begin execution or /plan-edit to make direct edits.`;
+You can read the plan file and the codebase. You CANNOT modify files directly — suggest changes for the user to apply via /plan-edit or /plan-editor.`;
 }
 
 export function getExecutionPrompt(planContent: string): string {

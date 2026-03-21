@@ -39,7 +39,7 @@ export function registerPlanTools(
       for (const q of params.questions) {
         let prompt = q.question;
         if (q.context) {
-          prompt += `\n${ctx.ui.theme.fg("muted", `→ ${q.context}`)}`;
+          prompt += `\n${ctx.ui.theme.fg("muted", `> ${q.context}`)}`;
         }
 
         const answer = await ctx.ui.input(prompt, "Type your answer...");
@@ -92,10 +92,21 @@ export function registerPlanTools(
       setState({ phase: "review" });
       persist();
 
-      ctx.ui.notify(`📋 Plan written to ${planFile}`, "info");
+      ctx.ui.notify(`Plan written to ${planFile}`, "info");
+
+      // Auto-display the plan in chat
+      pi.sendMessage(
+        {
+          customType: "pi-plan",
+          content: `**Plan** (${planFile}):\n\n${params.content}`,
+          display: true,
+          details: { action: "show" },
+        },
+        { triggerTurn: false },
+      );
 
       return {
-        content: [{ type: "text", text: `Plan written to ${planFile}. Entering review phase.` }],
+        content: [{ type: "text", text: `Plan written to ${planFile}. Entering review phase. The user can now review, edit (/plan-edit or /plan-editor), or approve (/plan-approve).` }],
         details: { planFile },
       };
     },
@@ -104,7 +115,7 @@ export function registerPlanTools(
       const preview = (args.content ?? "").slice(0, 80).replace(/\n/g, " ");
       return new Text(
         theme.fg("toolTitle", theme.bold("plan_draft ")) +
-          theme.fg("dim", preview + (args.content?.length > 80 ? "…" : "")),
+          theme.fg("dim", preview + (args.content?.length > 80 ? "..." : "")),
         0,
         0,
       );

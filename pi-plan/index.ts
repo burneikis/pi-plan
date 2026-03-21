@@ -1,22 +1,18 @@
 /**
- * pi-plan: Native Planning Extension for pi-coding-agent
+ * pi-plan: Planning Extension for pi-coding-agent
  *
- * Structured planning workflow: Q&A → Plan Draft → Review/Edit → Execute in fresh session.
+ * Structured planning workflow: Q&A -> Plan Draft -> Review/Edit -> Execute in fresh session.
  * Plans stored as markdown files in .pi/plans/<session-id>.plan.md.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Key } from "@mariozechner/pi-tui";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 
-import { registerExecutionCommands } from "./executor.js";
 import { registerPlanTools } from "./planner.js";
-import { getQAPrompt, getReviewPrompt } from "./prompts.js";
+import { getQAPrompt, getReviewPrompt, getExecutionPrompt } from "./prompts.js";
 import { updatePlanStatus } from "./render.js";
-import { showReviewPrompt } from "./reviewer.js";
-import { registerReviewCommands } from "./reviewer.js";
 import { createInitialState, getPlanFilePath, type PlanState } from "./state.js";
 
 // Read-only tools for Q&A and review phases
@@ -67,7 +63,6 @@ const SAFE_PATTERNS = [
 ];
 
 function isSafeCommand(command: string): boolean {
-  // Split on pipes and check each segment
   const segments = command.split(/\s*\|\s*/);
   return segments.every((seg) => SAFE_PATTERNS.some((p) => p.test(seg.trim())));
 }
@@ -76,7 +71,6 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
   let state: PlanState = createInitialState();
   let allToolNames: string[] = [];
 
-  // State accessors for sub-modules
   const getState = () => state;
   const setState = (partial: Partial<PlanState>) => {
     state = { ...state, ...partial };
@@ -93,23 +87,10 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
     }
   };
 
-  // Register CLI flag
-  pi.registerFlag("plan", {
-    description: "Start pi directly in planning mode",
-    type: "boolean",
-    default: false,
-  });
-
   // Register custom tools (plan_ask, plan_draft)
   registerPlanTools(pi, getState, setState, persist);
 
-  // Register review commands (/plan-edit, /plan-show)
-  registerReviewCommands(pi, getState);
-
-  // Register execution commands (/plan-approve)
-  registerExecutionCommands(pi, getState, setState, persist, restoreAllTools);
-
-  // /plan [prompt] — Start a new planning session
+  // /plan [prompt] -- Start a new planning session
   pi.registerCommand("plan", {
     description: "Start a new planning session. Optional: /plan <initial prompt>",
     handler: async (args, ctx) => {
@@ -121,7 +102,6 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
         if (!ok) return;
       }
 
-      // Capture all tools before restricting
       allToolNames = pi.getAllTools().map((t) => t.name);
 
       const planFile = getPlanFilePath(ctx.cwd, ctx.sessionManager.getSessionFile());
@@ -134,7 +114,7 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
       pi.setActiveTools(READ_ONLY_TOOLS);
       updatePlanStatus(ctx, state);
 
-      ctx.ui.notify("🔍 Plan mode active (Q&A phase)", "info");
+      ctx.ui.notify("Plan mode active (Q&A phase)", "info");
 
       if (args?.trim()) {
         pi.sendUserMessage(args.trim());
@@ -142,7 +122,7 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
     },
   });
 
-  // /plan-cancel — Cancel planning
+  // /plan-cancel -- Cancel planning
   pi.registerCommand("plan-cancel", {
     description: "Cancel planning and restore normal mode",
     handler: async (_args, ctx) => {
@@ -159,34 +139,117 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
     },
   });
 
-  // Keyboard shortcut: Ctrl+Alt+P
-  pi.registerShortcut(Key.ctrlAlt("p"), {
-    description: "Toggle plan mode / show plan status",
-    handler: async (ctx) => {
-      if (state.phase === "idle") {
-        // Start planning — same as /plan without args
-        allToolNames = pi.getAllTools().map((t) => t.name);
-        const planFile = getPlanFilePath(ctx.cwd, ctx.sessionManager.getSessionFile());
-        state = { phase: "qa", planFile };
-        persist();
-        pi.setActiveTools(READ_ONLY_TOOLS);
-        updatePlanStatus(ctx, state);
-        ctx.ui.notify("🔍 Plan mode active (Q&A phase)", "info");
-      } else {
-        // Show status
-        const phaseLabel =
-          state.phase === "qa"
-            ? "Q&A"
-            : state.phase === "review"
-              ? "Review"
-              : state.phase === "executing"
-                ? "Executing"
-                : "Idle";
-        ctx.ui.notify(
-          `📋 Planning: ${phaseLabel}${state.planFile ? `\nPlan: ${state.planFile}` : ""}`,
-          "info",
-        );
+  // /plan-edit -- Edit plan inline
+  pi.registerCommand("plan-edit", {
+    description: "Open the current plan in the inline editor",
+    handler: async (_args, ctx) => {
+      if (state.phase !== "review" || !state.planFile) {
+        ctx.ui.notify("No plan to edit. Start planning with /plan first.", "warning");
+        return;
       }
+
+      try {
+        const content = await readFile(state.planFile, "utf-8");
+        const edited = await ctx.ui.editor("Edit plan:", content);
+
+        if (edited !== undefined && edited !== content) {
+          await writeFile(state.planFile, edited, "utf-8");
+          ctx.ui.notify("Plan updated.", "info");
+        } else {
+          ctx.ui.notify("No changes made.", "info");
+        }
+      } catch (err) {
+        ctx.ui.notify(`Failed to edit plan: ${err}`, "error");
+      }
+    },
+  });
+
+  // /plan-editor -- Open plan in $EDITOR
+  pi.registerCommand("plan-editor", {
+    description: "Open the current plan in $EDITOR",
+    handler: async (_args, ctx) => {
+      if (!state.planFile) {
+        ctx.ui.notify("No plan file. Start planning with /plan first.", "warning");
+        return;
+      }
+
+      const editor = process.env.VISUAL || process.env.EDITOR || "vi";
+      try {
+        await pi.exec(editor, [state.planFile]);
+        ctx.ui.notify(`Plan edited in ${editor}.`, "info");
+      } catch (err) {
+        ctx.ui.notify(`Failed to open editor: ${err}`, "error");
+      }
+    },
+  });
+
+  // /plan-show -- Display plan contents
+  pi.registerCommand("plan-show", {
+    description: "Display the current plan contents",
+    handler: async (_args, ctx) => {
+      if (!state.planFile) {
+        ctx.ui.notify("No plan file. Start planning with /plan first.", "warning");
+        return;
+      }
+
+      try {
+        const content = await readFile(state.planFile, "utf-8");
+        pi.sendMessage(
+          {
+            customType: "pi-plan",
+            content: `**Plan** (${state.planFile}):\n\n${content}`,
+            display: true,
+            details: { action: "show" },
+          },
+          { triggerTurn: false },
+        );
+      } catch (err) {
+        ctx.ui.notify(`Failed to read plan: ${err}`, "error");
+      }
+    },
+  });
+
+  // /plan-approve -- Approve and execute in fresh session
+  pi.registerCommand("plan-approve", {
+    description: "Approve the plan and begin execution in a fresh session",
+    handler: async (_args, ctx) => {
+      if (state.phase !== "review" || !state.planFile) {
+        ctx.ui.notify("No plan to approve. Complete the Q&A phase first.", "warning");
+        return;
+      }
+
+      let planContent: string;
+      try {
+        planContent = await readFile(state.planFile, "utf-8");
+      } catch (err) {
+        ctx.ui.notify(`Failed to read plan file: ${err}`, "error");
+        return;
+      }
+
+      // Restore all tools before creating new session
+      restoreAllTools();
+
+      // Reset state
+      state = createInitialState();
+      persist();
+      updatePlanStatus(ctx, state);
+
+      ctx.ui.notify("Starting execution in new session...", "info");
+
+      await ctx.newSession({
+        setup: async (sm) => {
+          sm.appendMessage({
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: getExecutionPrompt(planContent),
+              },
+            ],
+            timestamp: Date.now(),
+          });
+        },
+      });
     },
   });
 
@@ -194,7 +257,6 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
   pi.on("tool_call", async (event, _ctx) => {
     if (state.phase !== "qa" && state.phase !== "review") return;
 
-    // Block edit and write tools
     if (event.toolName === "edit" || event.toolName === "write") {
       return {
         block: true,
@@ -202,7 +264,6 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
       };
     }
 
-    // Filter bash commands
     if (event.toolName === "bash") {
       const command = (event.input as { command: string }).command;
       if (!isSafeCommand(command)) {
@@ -237,66 +298,10 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
     }
   });
 
-  // After agent ends: handle phase transitions
-  pi.on("agent_end", async (_event, ctx) => {
-    if (!ctx.hasUI) return;
-
-    // After Q&A phase: if we transitioned to review, show review prompt
-    if (state.phase === "review" && state.planFile) {
-      pi.setActiveTools(REVIEW_TOOLS);
-      updatePlanStatus(ctx, state);
-
-      const action = await showReviewPrompt(pi, ctx, state);
-
-      if (action === "approve") {
-        // Need to cast since agent_end gives ExtensionContext, but we need command context
-        // Use /plan-approve command instead
-        pi.sendUserMessage("/plan-approve");
-      } else if (action === "edit") {
-        // Open editor
-        try {
-          const content = await readFile(state.planFile, "utf-8");
-          const edited = await ctx.ui.editor("Edit plan:", content);
-          if (edited !== undefined && edited !== content) {
-            await writeFile(state.planFile, edited, "utf-8");
-            ctx.ui.notify("📋 Plan updated.", "info");
-          }
-        } catch (err) {
-          ctx.ui.notify(`Failed to edit plan: ${err}`, "error");
-        }
-      } else if (action === "suggest") {
-        ctx.ui.notify(
-          "Type your suggestions. The model will propose changes to the plan.",
-          "info",
-        );
-        // User continues chatting in review mode
-      } else if (action === "cancel") {
-        state = createInitialState();
-        persist();
-        restoreAllTools();
-        updatePlanStatus(ctx, state);
-        ctx.ui.notify("Planning cancelled. Normal mode restored.", "info");
-      }
-    }
-  });
-
   // Restore state on session start
   pi.on("session_start", async (_event, ctx) => {
-    // Capture all tools
     allToolNames = pi.getAllTools().map((t) => t.name);
 
-    // Check --plan flag
-    if (pi.getFlag("plan") === true && state.phase === "idle") {
-      const planFile = getPlanFilePath(ctx.cwd, ctx.sessionManager.getSessionFile());
-      state = { phase: "qa", planFile };
-      persist();
-      pi.setActiveTools(READ_ONLY_TOOLS);
-      updatePlanStatus(ctx, state);
-      ctx.ui.notify("🔍 Plan mode active (Q&A phase) — started via --plan flag", "info");
-      return;
-    }
-
-    // Restore persisted state
     const entries = ctx.sessionManager.getEntries();
     let lastPlanState: { phase: string; planFile: string | null } | null = null;
 
@@ -316,14 +321,12 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
         planFile: lastPlanState.planFile,
       };
 
-      // Verify plan file still exists if in review
       if (state.phase === "review" && state.planFile && !existsSync(state.planFile)) {
         ctx.ui.notify(`Plan file missing: ${state.planFile}. Resetting to idle.`, "warning");
         state = createInitialState();
         persist();
       }
 
-      // Re-apply tool restrictions
       if (state.phase === "qa") {
         pi.setActiveTools(READ_ONLY_TOOLS);
       } else if (state.phase === "review") {
@@ -344,10 +347,8 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
     const action = details?.action;
 
     if (action === "show") {
-      // Plan display
-      text = theme.fg("accent", "📋 ") + content;
+      text = theme.fg("accent", "[plan] ") + content;
     } else {
-      // Phase transition or status message
       text = theme.fg("muted", content);
     }
 
