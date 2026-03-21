@@ -5,7 +5,7 @@ A planning extension for [pi-coding-agent](https://github.com/nickarino/pi-codin
 ## Quick Install
 
 ```bash
-git clone https://github.com/aburneikis/pi-plan.git ~/.pi/agent/extensions/pi-plan
+git clone https://github.com/burneikis/pi-plan.git ~/.pi/agent/extensions/pi-plan
 ```
 
 Instead of jumping straight into implementation, `pi-plan` guides the AI through a **Q&A → Plan Draft → Review → Execute** cycle — ensuring alignment before any code is written.
