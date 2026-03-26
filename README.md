@@ -1,6 +1,14 @@
 # Pi Plan
 
-A [pi](https://github.com/badlogic/pi-mono) extension that adds a `/plan` command for structured plan-driven development. The agent creates a plan, you review and edit it, then the agent executes it in a fresh session.
+A [pi](https://github.com/badlogic/pi-mono) extension that brings Claude Code-style plan mode to pi. Run `/plan`, let the agent explore your codebase and draft a step-by-step plan, review and refine it, then execute in a clean session with full context.
+
+## Features
+
+- **Claude Code-style plan mode** — Agent analyzes your codebase read-only, then produces an actionable plan before touching anything
+- **Fresh context execution** — Plans execute in a new session so the agent starts clean, with only the plan as context
+- **Manual editing via `$EDITOR`** — Open the plan in your preferred editor (vim, nvim, etc.) for hands-on changes
+- **Conversational edits** — Describe changes in natural language and the agent rewrites the plan for you
+- **Persistent plans** — Plans are saved to `~/.pi/agent/plans/<session_id>/plan.md` and survive restarts
 
 ## Installation
 
@@ -22,17 +30,13 @@ pi -e npm:@burneikis/pi-plan
 
 ## Flow
 
-1. **Plan** — You run `/plan <description>`. The agent explores the codebase and writes a `plan.md` file.
+1. **Plan** — You run `/plan <description>`. The agent explores the codebase (read-only) and writes a `plan.md` file.
 2. **Review** — You're prompted with options:
-   - **Ready** — Execute the plan in a new session
-   - **Edit** — Describe changes, agent rewrites the plan
-   - **Open in $EDITOR** — Edit the plan file manually
+   - **Ready** — Execute the plan in a new session with cleared context
+   - **Edit** — Describe changes in natural language, agent rewrites the plan
+   - **Open in $EDITOR** — Edit the plan file manually in your terminal editor
    - **Cancel** — Discard and return to normal mode
-3. **Execute** — A new session starts with the plan as context and full tool access.
-
-## Plan Storage
-
-Plans are stored at `~/.pi/agent/plans/<session_id>/plan.md` and persist across restarts.
+3. **Execute** — A fresh session starts with only the plan as context and full tool access.
 
 ## Plan Format
 
