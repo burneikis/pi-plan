@@ -1,61 +1,59 @@
-# pi-plan
+# Pi Plan
 
-A planning extension for [pi-coding-agent](https://github.com/nickarino/pi-coding-agent) that adds a structured planning workflow before code execution.
+A [pi](https://github.com/badlogic/pi-mono) extension that adds a `/plan` command for structured plan-driven development. The agent creates a plan, you review and edit it, then the agent executes it in a fresh session.
 
-## Quick Install
+## Installation
+
+Copy or symlink this directory into your pi extensions:
 
 ```bash
-git clone https://github.com/burneikis/pi-plan.git ~/.pi/agent/extensions/pi-plan
+# Global
+ln -s ~/Code/pi-plan ~/.pi/agent/extensions/pi-plan
+
+# Or project-local
+ln -s /path/to/pi-plan .pi/extensions/pi-plan
 ```
 
-Instead of jumping straight into implementation, `pi-plan` guides the AI through a **Q&A → Plan Draft → Review → Execute** cycle — ensuring alignment before any code is written.
+Or test directly:
 
-## How It Works
+```bash
+pi -e /path/to/pi-plan/index.ts
+```
 
-1. **Q&A Phase** — The agent explores the codebase (read-only) and asks you clarifying questions via the `plan_ask` tool to gather requirements and context.
-2. **Draft Phase** — Once enough information is gathered, the agent writes a detailed implementation plan as a markdown document using `plan_draft`.
-3. **Review Phase** — You review, discuss, and edit the plan until you're satisfied.
-4. **Execution** — The approved plan is executed in a fresh session with full tool access.
+## Usage
 
-During planning, all destructive operations (`edit`, `write`, non-read-only `bash` commands) are blocked — the agent can only read files and ask questions.
+```
+/plan make a todo app with React and TypeScript
+```
 
-## Commands
+## Flow
 
-| Command | Description |
-|---|---|
-| `/plan [prompt]` | Start a new planning session with an optional initial prompt |
-| `/plan-show` | Display the current plan contents |
-| `/plan-edit` | Edit the plan in the inline editor |
-| `/plan-editor` | Open the plan in `$EDITOR` |
-| `/plan-approve` | Approve the plan and begin execution in a fresh session |
-| `/plan-cancel` | Cancel the planning session and restore normal mode |
-
-## Custom Tools
-
-The extension registers two tools available to the AI during the Q&A phase:
-
-- **`plan_ask`** — Ask the user structured questions with optional context about why each question matters.
-- **`plan_draft`** — Write the full implementation plan as a markdown document, transitioning to the review phase.
+1. **Plan** — You run `/plan <description>`. The agent explores the codebase and writes a `plan.md` file.
+2. **Review** — You're prompted with options:
+   - **Ready** — Execute the plan in a new session
+   - **Edit** — Describe changes, agent rewrites the plan
+   - **Open in $EDITOR** — Edit the plan file manually
+   - **Cancel** — Discard and return to normal mode
+3. **Execute** — A new session starts with the plan as context and full tool access.
 
 ## Plan Storage
 
-Plans are saved as markdown files at `.pi/plans/<session-id>.plan.md` in your project directory.
+Plans are stored at `~/.pi/agent/plans/<session_id>/plan.md` and persist across restarts.
 
-## Safety
+## Plan Format
 
-During Q&A and review phases:
+```markdown
+# Plan: <title>
 
-- Only read-only tools are active (`read`, `bash`, `grep`, `find`, `ls`)
-- Bash commands are filtered to a safe allowlist (e.g., `cat`, `grep`, `find`, `ls`, `tree`, `git status/log/diff`, `jq`, etc.)
-- `edit` and `write` tool calls are blocked entirely
-- Full tool access is only restored when the plan is approved and execution begins in a new session
+## Goal
+Brief description of what we're building
 
-## Project Structure
+## Steps
 
-```
-├── index.ts      # Extension entry point — commands, event hooks, tool blocking
-├── planner.ts    # plan_ask and plan_draft tool registration
-├── prompts.ts    # System prompt injections for each phase
-├── render.ts     # Status bar updates
-└── state.ts      # State types and helpers
+1. First step
+2. Second step
+3. Third step
+
+## Notes
+Additional context, constraints, or decisions
 ```

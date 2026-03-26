@@ -1,361 +1,291 @@
 /**
- * pi-plan: Planning Extension for pi-coding-agent
+ * Pi Plan Extension
  *
- * Structured planning workflow: Q&A -> Plan Draft -> Review/Edit -> Execute in fresh session.
- * Plans stored as markdown files in .pi/plans/<session-id>.plan.md.
+ * Adds a `/plan` command for structured plan-driven development.
+ * The agent creates a plan, the user reviews/edits it, then the agent executes it.
+ *
+ * Flow:
+ * 1. User runs `/plan <description>`
+ * 2. Agent analyzes codebase (read-only) and writes a plan.md file
+ * 3. User reviews with options: Ready, Edit, Open in $EDITOR, Cancel
+ * 4. Agent executes the plan in a new session with full tool access
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
-import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
-
-import { registerPlanTools } from "./planner.js";
-import { getQAPrompt, getReviewPrompt, getExecutionPrompt } from "./prompts.js";
-import { updatePlanStatus } from "./render.js";
-import { createInitialState, getPlanFilePath, type PlanState } from "./state.js";
-
-// Read-only tools for Q&A and review phases
-const READ_ONLY_TOOLS = ["read", "bash", "grep", "find", "ls", "plan_ask", "plan_draft"];
-const REVIEW_TOOLS = ["read", "bash", "grep", "find", "ls"];
-
-// Safe bash command patterns (read-only)
-const SAFE_PATTERNS = [
-  /^\s*cat\b/,
-  /^\s*head\b/,
-  /^\s*tail\b/,
-  /^\s*less\b/,
-  /^\s*more\b/,
-  /^\s*grep\b/,
-  /^\s*rg\b/,
-  /^\s*find\b/,
-  /^\s*fd\b/,
-  /^\s*ls\b/,
-  /^\s*pwd\b/,
-  /^\s*echo\b/,
-  /^\s*printf\b/,
-  /^\s*wc\b/,
-  /^\s*sort\b/,
-  /^\s*uniq\b/,
-  /^\s*diff\b/,
-  /^\s*file\b/,
-  /^\s*stat\b/,
-  /^\s*du\b/,
-  /^\s*df\b/,
-  /^\s*tree\b/,
-  /^\s*which\b/,
-  /^\s*type\b/,
-  /^\s*env\b/,
-  /^\s*printenv\b/,
-  /^\s*uname\b/,
-  /^\s*whoami\b/,
-  /^\s*date\b/,
-  /^\s*jq\b/,
-  /^\s*sed\s+-n/i,
-  /^\s*awk\b/,
-  /^\s*bat\b/,
-  /^\s*exa\b/,
-  /^\s*git\s+(status|log|diff|show|branch|remote|config\s+--get|ls-)/i,
-  /^\s*npm\s+(list|ls|view|info|search|outdated|audit)/i,
-  /^\s*node\s+--version/i,
-  /^\s*python\s+--version/i,
-  /^\s*curl\s/i,
-];
-
-function isSafeCommand(command: string): boolean {
-  const segments = command.split(/\s*\|\s*/);
-  return segments.every((seg) => SAFE_PATTERNS.some((p) => p.test(seg.trim())));
-}
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionCommandContext,
+} from "@mariozechner/pi-coding-agent";
+import { mkdir, readFile, access } from "node:fs/promises";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { deriveSessionId, extractPlanTitle, parsePlanSteps } from "./utils.js";
 
 export default function piPlanExtension(pi: ExtensionAPI): void {
-  let state: PlanState = createInitialState();
-  let allToolNames: string[] = [];
+  let planFilePath: string | null = null;
+  let isPlanMode = false;
+  let savedCommandCtx: ExtensionCommandContext | null = null;
 
-  const getState = () => state;
-  const setState = (partial: Partial<PlanState>) => {
-    state = { ...state, ...partial };
-  };
-  const persist = () => {
-    pi.appendEntry("pi-plan-state", {
-      phase: state.phase,
-      planFile: state.planFile,
-    });
-  };
-  const restoreAllTools = () => {
-    if (allToolNames.length > 0) {
-      pi.setActiveTools(allToolNames);
+  function updateUI(ctx: ExtensionContext): void {
+    if (isPlanMode) {
+      ctx.ui.setStatus("pi-plan", ctx.ui.theme.fg("warning", "planning"));
+    } else {
+      ctx.ui.setStatus("pi-plan", undefined);
     }
-  };
+  }
 
-  // Register custom tools (plan_ask, plan_draft)
-  registerPlanTools(pi, getState, setState, persist);
+  function persistState(): void {
+    pi.appendEntry("pi-plan", { planFilePath, isPlanMode });
+  }
 
-  // /plan [prompt] -- Start a new planning session
-  pi.registerCommand("plan", {
-    description: "Start a new planning session. Optional: /plan <initial prompt>",
-    handler: async (args, ctx) => {
-      if (state.phase !== "idle") {
-        const ok = await ctx.ui.confirm(
-          "Active plan",
-          "A planning session is already active. Start a new one?",
-        );
-        if (!ok) return;
-      }
-
-      allToolNames = pi.getAllTools().map((t) => t.name);
-
-      const planFile = getPlanFilePath(ctx.cwd, ctx.sessionManager.getSessionFile());
-      state = {
-        phase: "qa",
-        planFile,
-      };
-      persist();
-
-      pi.setActiveTools(READ_ONLY_TOOLS);
-      updatePlanStatus(ctx, state);
-
-      ctx.ui.notify("Plan mode active (Q&A phase)", "info");
-
-      if (args?.trim()) {
-        pi.sendUserMessage(args.trim());
-      }
-    },
-  });
-
-  // /plan-cancel -- Cancel planning
-  pi.registerCommand("plan-cancel", {
-    description: "Cancel planning and restore normal mode",
-    handler: async (_args, ctx) => {
-      if (state.phase === "idle") {
-        ctx.ui.notify("No active planning session.", "info");
-        return;
-      }
-
-      state = createInitialState();
-      persist();
-      restoreAllTools();
-      updatePlanStatus(ctx, state);
-      ctx.ui.notify("Planning cancelled. Normal mode restored.", "info");
-    },
-  });
-
-  // /plan-edit -- Edit plan inline
-  pi.registerCommand("plan-edit", {
-    description: "Open the current plan in the inline editor",
-    handler: async (_args, ctx) => {
-      if (state.phase !== "review" || !state.planFile) {
-        ctx.ui.notify("No plan to edit. Start planning with /plan first.", "warning");
-        return;
-      }
-
-      try {
-        const content = await readFile(state.planFile, "utf-8");
-        const edited = await ctx.ui.editor("Edit plan:", content);
-
-        if (edited !== undefined && edited !== content) {
-          await writeFile(state.planFile, edited, "utf-8");
-          ctx.ui.notify("Plan updated.", "info");
-        } else {
-          ctx.ui.notify("No changes made.", "info");
-        }
-      } catch (err) {
-        ctx.ui.notify(`Failed to edit plan: ${err}`, "error");
-      }
-    },
-  });
-
-  // /plan-editor -- Open plan in $EDITOR
-  pi.registerCommand("plan-editor", {
-    description: "Open the current plan in $EDITOR",
-    handler: async (_args, ctx) => {
-      if (!state.planFile) {
-        ctx.ui.notify("No plan file. Start planning with /plan first.", "warning");
-        return;
-      }
-
-      const editor = process.env.VISUAL || process.env.EDITOR || "vi";
-      try {
-        await pi.exec(editor, [state.planFile]);
-        ctx.ui.notify(`Plan edited in ${editor}.`, "info");
-      } catch (err) {
-        ctx.ui.notify(`Failed to open editor: ${err}`, "error");
-      }
-    },
-  });
-
-  // /plan-show -- Display plan contents
-  pi.registerCommand("plan-show", {
-    description: "Display the current plan contents",
-    handler: async (_args, ctx) => {
-      if (!state.planFile) {
-        ctx.ui.notify("No plan file. Start planning with /plan first.", "warning");
-        return;
-      }
-
-      try {
-        const content = await readFile(state.planFile, "utf-8");
-        pi.sendMessage(
-          {
-            customType: "pi-plan",
-            content: `**Plan** (${state.planFile}):\n\n${content}`,
-            display: true,
-            details: { action: "show" },
-          },
-          { triggerTurn: false },
-        );
-      } catch (err) {
-        ctx.ui.notify(`Failed to read plan: ${err}`, "error");
-      }
-    },
-  });
-
-  // /plan-approve -- Approve and execute in fresh session
-  pi.registerCommand("plan-approve", {
-    description: "Approve the plan and begin execution in a fresh session",
-    handler: async (_args, ctx) => {
-      if (state.phase !== "review" || !state.planFile) {
-        ctx.ui.notify("No plan to approve. Complete the Q&A phase first.", "warning");
-        return;
-      }
-
+  async function reviewLoop(ctx: ExtensionContext): Promise<void> {
+    while (true) {
       let planContent: string;
       try {
-        planContent = await readFile(state.planFile, "utf-8");
-      } catch (err) {
-        ctx.ui.notify(`Failed to read plan file: ${err}`, "error");
+        planContent = await readFile(planFilePath!, "utf-8");
+      } catch {
+        ctx.ui.notify("Could not read plan file.", "error");
         return;
       }
 
-      // Restore all tools before creating new session
-      restoreAllTools();
+      const steps = parsePlanSteps(planContent);
 
-      // Reset state
-      state = createInitialState();
-      persist();
-      updatePlanStatus(ctx, state);
+      const choice = await ctx.ui.select(
+        `Plan (${steps.length} steps) — What would you like to do?`,
+        [
+          "Ready — Execute the plan",
+          "Edit — Ask for changes",
+          "Open in $EDITOR — Edit manually",
+          "Cancel — Discard the plan",
+        ],
+      );
 
-      ctx.ui.notify("Starting execution in new session...", "info");
+      if (!choice || choice.startsWith("Cancel")) {
+        isPlanMode = false;
+        updateUI(ctx);
+        persistState();
+        ctx.ui.notify("Plan cancelled.", "info");
+        return;
+      }
 
-      await ctx.newSession({
-        setup: async (sm) => {
-          sm.appendMessage({
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: getExecutionPrompt(planContent),
-              },
-            ],
-            timestamp: Date.now(),
-          });
-        },
-      });
+      if (choice.startsWith("Ready")) {
+        if (savedCommandCtx) {
+          await startExecution(ctx, savedCommandCtx);
+        } else {
+          // Fallback: execute in same session if command context lost
+          await startExecutionInPlace(ctx);
+        }
+        return;
+      }
+
+      if (choice.startsWith("Edit")) {
+        const changes = await ctx.ui.editor(
+          "What changes would you like to the plan?",
+          "",
+        );
+        if (changes?.trim()) {
+          pi.sendUserMessage(
+            `Update the plan at ${planFilePath} with these changes:\n\n${changes.trim()}\n\n` +
+              `Keep the same format.`,
+          );
+          return; // agent_end will re-trigger the review loop
+        }
+        continue;
+      }
+
+      if (choice.startsWith("Open")) {
+        const editor = process.env.EDITOR || process.env.VISUAL || "vi";
+        try {
+          spawnSync(editor, [planFilePath!], { stdio: "inherit" });
+        } catch (err) {
+          ctx.ui.notify(`Failed to open editor: ${err}`, "error");
+        }
+        continue;
+      }
+    }
+  }
+
+  async function startExecution(
+    ctx: ExtensionContext,
+    cmdCtx: ExtensionCommandContext,
+  ): Promise<void> {
+    isPlanMode = false;
+    updateUI(ctx);
+    persistState();
+
+    let planContent: string;
+    try {
+      planContent = await readFile(planFilePath!, "utf-8");
+    } catch {
+      ctx.ui.notify("Could not read plan file for execution.", "error");
+      return;
+    }
+
+    const title = extractPlanTitle(planContent);
+
+    const result = await cmdCtx.newSession({
+      parentSession: ctx.sessionManager.getSessionFile(),
+    });
+
+    if (result.cancelled) {
+      ctx.ui.notify("Execution cancelled.", "warning");
+      return;
+    }
+
+    if (title) {
+      pi.setSessionName(`Plan: ${title}`);
+    }
+
+    pi.sendUserMessage(
+      `Execute the following plan step by step. After completing each step, note which step you just finished.\n\n${planContent}`,
+      { deliverAs: "followUp" },
+    );
+  }
+
+  async function startExecutionInPlace(ctx: ExtensionContext): Promise<void> {
+    isPlanMode = false;
+    updateUI(ctx);
+    persistState();
+
+    let planContent: string;
+    try {
+      planContent = await readFile(planFilePath!, "utf-8");
+    } catch {
+      ctx.ui.notify("Could not read plan file for execution.", "error");
+      return;
+    }
+
+    const title = extractPlanTitle(planContent);
+    if (title) {
+      pi.setSessionName(`Plan: ${title}`);
+    }
+
+    pi.sendUserMessage(
+      `Execute the following plan step by step. After completing each step, note which step you just finished.\n\n${planContent}`,
+      { deliverAs: "followUp" },
+    );
+  }
+
+  // --- Command Registration ---
+
+  pi.registerCommand("plan", {
+    description: "Create and execute a structured plan",
+    handler: async (args, ctx) => {
+      if (!args?.trim()) {
+        ctx.ui.notify("Usage: /plan <description of what to build>", "warning");
+        return;
+      }
+
+      // Save command context for newSession later
+      savedCommandCtx = ctx;
+
+      // Derive plan file path
+      const sessionFile = ctx.sessionManager.getSessionFile();
+      const sessionId = deriveSessionId(sessionFile);
+      const planDir = join(homedir(), ".pi", "agent", "plans", sessionId);
+      await mkdir(planDir, { recursive: true });
+      planFilePath = join(planDir, "plan.md");
+
+      // Enter planning mode
+      isPlanMode = true;
+      updateUI(ctx);
+      persistState();
+
+      // Ask the agent to create the plan
+      pi.sendUserMessage(
+        `Analyze the codebase and create a detailed plan for: ${args.trim()}\n\n` +
+          `Write the plan to: ${planFilePath}\n\n` +
+          `Use this format:\n\n` +
+          `# Plan: <title>\n\n` +
+          `## Goal\n<brief description of what we're building>\n\n` +
+          `## Steps\n\n` +
+          `1. Step one description\n` +
+          `2. Step two description\n` +
+          `3. Step three description\n...\n\n` +
+          `## Notes\n<any additional context, constraints, or decisions>\n\n` +
+          `Be specific and actionable in each step.`,
+        { deliverAs: "followUp" },
+      );
     },
   });
 
-  // Block destructive operations during Q&A and review phases
-  pi.on("tool_call", async (event, _ctx) => {
-    if (state.phase !== "qa" && state.phase !== "review") return;
+  // --- Event Handlers ---
 
-    if (event.toolName === "edit" || event.toolName === "write") {
-      return {
-        block: true,
-        reason: `Planning mode: ${event.toolName} is not available during the ${state.phase} phase. Only read-only tools are allowed.`,
-      };
-    }
+  // Inject planning instructions
+  pi.on("before_agent_start", async () => {
+    if (!isPlanMode) return;
 
-    if (event.toolName === "bash") {
-      const command = (event.input as { command: string }).command;
-      if (!isSafeCommand(command)) {
-        return {
-          block: true,
-          reason: `Planning mode: This bash command is not allowed during the ${state.phase} phase. Only read-only commands (cat, grep, find, ls, git status/log/diff, tree, etc.) are permitted.\nCommand: ${command}`,
-        };
-      }
-    }
+    return {
+      message: {
+        customType: "pi-plan-context",
+        content: `[PLANNING MODE ACTIVE]
+You are in planning mode. Your job is to explore the codebase and write a detailed, actionable plan.
+
+Focus on reading and understanding the code — do NOT make any changes to the codebase yet.
+Write the plan file using the specified format with numbered steps.`,
+        display: false,
+      },
+    };
   });
 
-  // Inject phase-appropriate system prompt
-  pi.on("before_agent_start", async (_event, _ctx) => {
-    if (state.phase === "qa") {
-      return {
-        message: {
-          customType: "pi-plan",
-          content: getQAPrompt(),
-          display: false,
-        },
-      };
+  // After agent finishes in planning mode, enter review loop
+  pi.on("agent_end", async (_event, ctx) => {
+    if (!isPlanMode || !planFilePath) return;
+    if (!ctx.hasUI) return;
+
+    // Check if the plan file exists
+    try {
+      await access(planFilePath);
+    } catch {
+      return; // Plan not written yet
     }
 
-    if (state.phase === "review" && state.planFile) {
-      return {
-        message: {
-          customType: "pi-plan",
-          content: getReviewPrompt(state.planFile),
-          display: false,
-        },
-      };
+    // Read and validate the plan
+    const planContent = await readFile(planFilePath, "utf-8");
+    const steps = parsePlanSteps(planContent);
+
+    if (steps.length === 0) {
+      ctx.ui.notify(
+        "No steps found in the plan. Ask the agent to refine it.",
+        "warning",
+      );
+      return;
     }
+
+    // Enter the review loop
+    await reviewLoop(ctx);
+  });
+
+  // Filter stale planning context from LLM messages
+  pi.on("context", async (event) => {
+    if (isPlanMode) return;
+
+    return {
+      messages: event.messages.filter((m) => {
+        const msg = m as typeof m & { customType?: string };
+        return msg.customType !== "pi-plan-context";
+      }),
+    };
   });
 
   // Restore state on session start
   pi.on("session_start", async (_event, ctx) => {
-    allToolNames = pi.getAllTools().map((t) => t.name);
-
     const entries = ctx.sessionManager.getEntries();
-    let lastPlanState: { phase: string; planFile: string | null } | null = null;
+    const lastState = entries
+      .filter(
+        (e: { type: string; customType?: string }) =>
+          e.type === "custom" && e.customType === "pi-plan",
+      )
+      .pop() as
+      | { data?: { planFilePath: string | null; isPlanMode: boolean } }
+      | undefined;
 
-    for (const entry of entries) {
-      if (
-        entry.type === "custom" &&
-        (entry as any).customType === "pi-plan-state" &&
-        (entry as any).data
-      ) {
-        lastPlanState = (entry as any).data;
-      }
+    if (lastState?.data) {
+      planFilePath = lastState.data.planFilePath ?? null;
+      isPlanMode = lastState.data.isPlanMode ?? false;
     }
 
-    if (lastPlanState) {
-      state = {
-        phase: lastPlanState.phase as PlanState["phase"],
-        planFile: lastPlanState.planFile,
-      };
-
-      if (state.phase === "review" && state.planFile && !existsSync(state.planFile)) {
-        ctx.ui.notify(`Plan file missing: ${state.planFile}. Resetting to idle.`, "warning");
-        state = createInitialState();
-        persist();
-      }
-
-      if (state.phase === "qa") {
-        pi.setActiveTools(READ_ONLY_TOOLS);
-      } else if (state.phase === "review") {
-        pi.setActiveTools(REVIEW_TOOLS);
-      }
-    }
-
-    updatePlanStatus(ctx, state);
-  });
-
-  // Custom message renderer for pi-plan messages
-  pi.registerMessageRenderer("pi-plan", (message, options, theme) => {
-    const { expanded } = options;
-    const content = typeof message.content === "string" ? message.content : "";
-
-    let text = "";
-    const details = (message as any).details;
-    const action = details?.action;
-
-    if (action === "show") {
-      text = theme.fg("accent", "[plan] ") + content;
-    } else {
-      text = theme.fg("muted", content);
-    }
-
-    if (expanded && details) {
-      text += "\n" + theme.fg("dim", JSON.stringify(details, null, 2));
-    }
-
-    return new Text(text, 0, 0);
+    updateUI(ctx);
   });
 }
