@@ -1,6 +1,6 @@
 {
   "name": "@burneikis/pi-plan",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Claude Code-style plan mode for pi — create, review, edit, and execute structured plans in a fresh context",
   "keywords": [
     "pi-package"
