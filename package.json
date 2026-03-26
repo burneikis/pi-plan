@@ -1,0 +1,8 @@
+{
+  "name": "pi-plan",
+  "version": "1.0.0",
+  "description": "A pi extension for structured plan-driven development",
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
