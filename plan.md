@@ -317,7 +317,7 @@ interface PlanStep {
 - **No args to `/plan`:** Show usage hint via `ctx.ui.notify()`
 - **Plan file doesn't exist when review loop runs:** Agent hasn't written it yet; skip the review prompt (handled by `access()` check)
 - **Empty plan (no steps parsed):** Notify user and stay in planning mode so agent can try again
-- **$EDITOR not set:** Fall back to `vi`
+- **$EDITOR not set:** Fall back to `nano`
 - **$EDITOR fails or is killed:** Catch error, notify user, continue review loop
 - **Session has no session file (ephemeral):** Use a hash/timestamp-based fallback for the plan directory name
 - **Non-interactive mode (`ctx.hasUI === false`):** Skip the review loop and UI updates; plan file is still written and can be used externally
