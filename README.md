@@ -28,7 +28,7 @@ pi -e /path/to/pi-plan/index.ts
 
 ## Flow
 
-1. **Plan** — You run `/plan <description>`. The agent explores the codebase with read-only tools and writes a `plan.md` file.
+1. **Plan** — You run `/plan <description>`. The agent explores the codebase and writes a `plan.md` file.
 2. **Review** — You're prompted with options:
    - **Ready** — Execute the plan in a new session
    - **Edit** — Describe changes, agent rewrites the plan
