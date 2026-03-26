@@ -14,7 +14,6 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
-  ExtensionCommandContext,
 } from "@mariozechner/pi-coding-agent";
 import { mkdir, readFile, access } from "node:fs/promises";
 import { join } from "node:path";
@@ -69,7 +68,7 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
       }
 
       if (choice.startsWith("Ready")) {
-        await startExecution(ctx as ExtensionCommandContext);
+        await startExecution(ctx);
         return;
       }
 
@@ -100,7 +99,7 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
     }
   }
 
-  async function startExecution(ctx: ExtensionCommandContext): Promise<void> {
+  async function startExecution(ctx: ExtensionContext): Promise<void> {
     isPlanMode = false;
     updateUI(ctx);
     persistState();
@@ -113,32 +112,15 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
       return;
     }
 
-    const result = await ctx.newSession({
-      parentSession: ctx.sessionManager.getSessionFile(),
-      setup: async (sm) => {
-        sm.appendMessage({
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `Execute the following plan step by step.\n\n${planContent}`,
-            },
-          ],
-          timestamp: Date.now(),
-        });
-      },
-    });
-
-    if (result.cancelled) {
-      updateUI(ctx);
-      ctx.ui.notify("Execution cancelled.", "warning");
-      return;
-    }
-
     const title = extractPlanTitle(planContent);
     if (title) {
       pi.setSessionName(`Plan: ${title}`);
     }
+
+    pi.sendUserMessage(
+      `Execute the following plan step by step. After completing each step, note which step you just finished.\n\n${planContent}`,
+      { deliverAs: "followUp" },
+    );
   }
 
   // --- Command Registration ---
