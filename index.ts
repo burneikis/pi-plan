@@ -14,6 +14,7 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionCommandContext,
 } from "@mariozechner/pi-coding-agent";
 import { mkdir, readFile, access } from "node:fs/promises";
 import { join } from "node:path";
@@ -24,6 +25,7 @@ import { deriveSessionId, extractPlanTitle, parsePlanSteps } from "./utils.js";
 export default function piPlanExtension(pi: ExtensionAPI): void {
   let planFilePath: string | null = null;
   let isPlanMode = false;
+  let savedCommandCtx: ExtensionCommandContext | null = null;
 
   function updateUI(ctx: ExtensionContext): void {
     if (isPlanMode) {
@@ -68,7 +70,12 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
       }
 
       if (choice.startsWith("Ready")) {
-        await startExecution(ctx);
+        if (savedCommandCtx) {
+          await startExecution(ctx, savedCommandCtx);
+        } else {
+          // Fallback: execute in same session if command context lost
+          await startExecutionInPlace(ctx);
+        }
         return;
       }
 
@@ -99,7 +106,44 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
     }
   }
 
-  async function startExecution(ctx: ExtensionContext): Promise<void> {
+  async function startExecution(
+    ctx: ExtensionContext,
+    cmdCtx: ExtensionCommandContext,
+  ): Promise<void> {
+    isPlanMode = false;
+    updateUI(ctx);
+    persistState();
+
+    let planContent: string;
+    try {
+      planContent = await readFile(planFilePath!, "utf-8");
+    } catch {
+      ctx.ui.notify("Could not read plan file for execution.", "error");
+      return;
+    }
+
+    const title = extractPlanTitle(planContent);
+
+    const result = await cmdCtx.newSession({
+      parentSession: ctx.sessionManager.getSessionFile(),
+    });
+
+    if (result.cancelled) {
+      ctx.ui.notify("Execution cancelled.", "warning");
+      return;
+    }
+
+    if (title) {
+      pi.setSessionName(`Plan: ${title}`);
+    }
+
+    pi.sendUserMessage(
+      `Execute the following plan step by step. After completing each step, note which step you just finished.\n\n${planContent}`,
+      { deliverAs: "followUp" },
+    );
+  }
+
+  async function startExecutionInPlace(ctx: ExtensionContext): Promise<void> {
     isPlanMode = false;
     updateUI(ctx);
     persistState();
@@ -132,6 +176,9 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
         ctx.ui.notify("Usage: /plan <description of what to build>", "warning");
         return;
       }
+
+      // Save command context for newSession later
+      savedCommandCtx = ctx;
 
       // Derive plan file path
       const sessionFile = ctx.sessionManager.getSessionFile();
