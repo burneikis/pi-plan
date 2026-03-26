@@ -4,20 +4,14 @@ A [pi](https://github.com/badlogic/pi-mono) extension that adds a `/plan` comman
 
 ## Installation
 
-Copy or symlink this directory into your pi extensions:
-
 ```bash
-# Global
-ln -s ~/Code/pi-plan ~/.pi/agent/extensions/pi-plan
-
-# Or project-local
-ln -s /path/to/pi-plan .pi/extensions/pi-plan
+pi install npm:@burneikis/pi-plan
 ```
 
-Or test directly:
+Or test without installing:
 
 ```bash
-pi -e /path/to/pi-plan/index.ts
+pi -e npm:@burneikis/pi-plan
 ```
 
 ## Usage

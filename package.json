@@ -1,17 +1,21 @@
 {
-  "name": "pi-plan",
+  "name": "@burneikis/pi-plan",
   "version": "1.0.0",
   "description": "A pi extension for structured plan-driven development",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/aburneikis/pi-plan"
+    "url": "https://github.com/burneikis/pi-plan"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }
